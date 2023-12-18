@@ -1,14 +1,16 @@
 #include "LedControl.h"
 #include <LiquidCrystal.h>
 #include <EEPROM.h>
+#include "harrypotter.h"
 
 const int dinPin = 12;
-const int clockPin = 11;
-const int loadPin = 10;
+const int clockPin = 13;
+const int loadPin = 2;
 const int yPin = A0;
 const int xPin = A1;
 const int swPin = A2;
 const int seedPin = A3;
+const int buzzPin = 11;
 
 byte swState = HIGH, swLastState = HIGH, swDebounceState = HIGH;
 
@@ -19,17 +21,17 @@ const byte d4 = 7;
 const byte d5 = 6;
 const byte d6 = 5;
 const byte d7 = 4;
-const byte a = 3;
+const byte a = 10;
 
 // LCD object
 LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
-String menuOptions[] = {"1. Start", "2. Top 3", "3. Settings", "4. About"};
+String menuOptions[] = {"1. Start", "2. Top 3", "3. Reset Top 3", "4. Brightness", "5. Sounds", "6. About"};
 String settingsMenuOptions[] = {"1. Display", "2. Game", "3. Back"};
 
-unsigned int menuOptionsLength = 4;
+const unsigned int menuOptionsLength = 6;
 unsigned int menuOptionIndex = 0;
-unsigned int settingsMenuOptionsLength = 3;
+const unsigned int settingsMenuOptionsLength = 3;
 unsigned int settingsMenuOptionIndex = 0;
 unsigned int top3Index = 0;
 unsigned int textScrollAmount = 0;
@@ -111,6 +113,26 @@ byte places[3][8] = {
      B00000100,
      B00111100}};
 
+byte rightArrow[8] = {
+    B00000,
+    B01000,
+    B01100,
+    B01110,
+    B01111,
+    B01110,
+    B01100,
+    B01000};
+
+byte leftArrow[8] = {
+    B00000,
+    B00010,
+    B00110,
+    B01110,
+    B11110,
+    B01110,
+    B00110,
+    B00010};
+
 byte top3Names[3][3];
 float top3Scores[3];
 unsigned int top3Times[3];
@@ -127,11 +149,11 @@ const unsigned int fastBlinkingDelay = 200;
 const unsigned int veryFastBlinkingDelay = 30;
 const unsigned int buttonHoldTime = 3000;
 const unsigned int startDelay = 5000;
-const unsigned int lcdColumns = 16;
+const unsigned int lcdColumns = 32;
 const unsigned int lcdRows = 2;
 
 const unsigned int moveInterval = 125;   // Timing variable to control the speed of LED movement
-const unsigned int scrollInterval = 250; // Timing variable to control the speed of menu scrolling
+const unsigned int scrollInterval = 350; // Timing variable to control the speed of menu scrolling
 unsigned long lastClicked = 0, lastDebounceTime = 0;
 
 const byte matrixSize = 8; // Size of the LED matrix
@@ -146,6 +168,11 @@ bool matrixBrightnessChosen = false;
 bool top3Chosen = false;
 bool selectedName = false;
 bool toRegisterTop3 = false;
+bool resetTop3Chosen = false;
+bool resetTop3Yes = false;
+bool sounds = true;
+bool soundsChosen = false;
+bool singed = false;
 
 byte matrix[matrixSize][matrixSize] = {
     {0, 0, 0, 0, 0, 0, 0, 0},
@@ -195,18 +222,17 @@ void setup()
 
     pinMode(swPin, INPUT_PULLUP);
     pinMode(a, OUTPUT);
+    pinMode(buzzPin, OUTPUT);
 
     lcdBrightness = max(min(EEPROM.read(0), 255), 0);
     matrixBrightness = max(min(map(EEPROM.read(1), 0, 15, 0, 15), 255), 0);
-
-    // for(int i=2; i<35; i++)
-    //     EEPROM.update(i, 0);
 
     // get top 3 names, scores and times from EEPROM
     EEPROM.get(2, top3Names);
     EEPROM.get(11, top3Scores);
     EEPROM.get(23, top3Times);
 
+    EEPROM.get(35, sounds);
     // the zero refers to the MAX7219 number, it is zero for 1 chip
     lc.shutdown(0, false); // turn off power saving, enables display
 
@@ -216,17 +242,25 @@ void setup()
 
     // set up the LCD's number of columns and rows:
     lcd.begin(lcdColumns, lcdRows);
+
     lcd.createChar(0, emptyRectangle);
     lcd.createChar(1, fullRectangle);
     lcd.createChar(2, crown);
     lcd.createChar(3, arrowDown);
+    lcd.createChar(4, rightArrow);
+    lcd.createChar(5, leftArrow);
 
     lcd.setCursor(0, 0);
     lcd.print("Hello! Ready for");
     lcd.setCursor(0, 1);
     lcd.print("some bamboozle?");
+
     analogWrite(a, lcdBrightness);
-    delay(5000);
+    if (sounds)
+        welcomeSong();
+
+    const unsigned int welcomeDelay = 3000;
+    delay(welcomeDelay);
     lcd.clear();
 }
 
@@ -277,6 +311,7 @@ void loop()
                         if (swDebounceState == LOW)
                         {
                             toRegisterTop3 = true;
+                            singed = false;
                             lcd.clear();
                         }
                     }
@@ -290,7 +325,31 @@ void displayMenu()
 {
     if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen)
         return;
-    if (top3Chosen)
+    if (soundsChosen)
+    {
+        lcd.setCursor(0, 0);
+        lcd.print("Sounds: ");
+        lcd.setCursor(0, 1);
+        lcd.print("On ");
+        if (!sounds)
+            lcd.write(byte(4));
+        else
+            lcd.write(byte(5));
+        lcd.print(" Off");
+    }
+    else if (resetTop3Chosen)
+    {
+        lcd.setCursor(0, 0);
+        lcd.print("Are you sure?");
+        lcd.setCursor(0, 1);
+        lcd.print("Yes ");
+        if (!resetTop3Yes)
+            lcd.write(byte(4));
+        else
+            lcd.write(byte(5));
+        lcd.print(" No");
+    }
+    else if (top3Chosen)
     {
         lcd.setCursor(0, 0);
         lcd.print("  Name Acc\%  Sec");
@@ -328,7 +387,7 @@ void displayMenu()
 
 void scrollThroughMenu()
 {
-    if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen)
+    if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen || resetTop3Chosen || soundsChosen)
         return;
     unsigned int currentTime = millis();
     if (currentTime - lastScrollUpdateTime >= scrollInterval)
@@ -352,6 +411,7 @@ void scrollThroughMenu()
                 settingsMenuOptionIndex++;
                 settingsMenuOptionIndex %= settingsMenuOptionsLength;
             }
+            tone(buzzPin, 1000 * sounds, 100);
         }
         else if (yRead > maxThreshold)
         {
@@ -370,6 +430,7 @@ void scrollThroughMenu()
                 settingsMenuOptionIndex--;
                 settingsMenuOptionIndex = (settingsMenuOptionIndex + settingsMenuOptionsLength) % settingsMenuOptionsLength;
             }
+            tone(buzzPin, 1000 * sounds, 100);
         }
         lcd.clear();
     }
@@ -383,6 +444,10 @@ void chooseMenuOption()
         setLcdBrightness();
     else if (matrixBrightnessChosen)
         setMatrixBrightness();
+    else if (resetTop3Chosen)
+        resetTop3();
+    else if (soundsChosen)
+        setSounds();
     else
     {
         swState = digitalRead(swPin);
@@ -410,9 +475,17 @@ void chooseMenuOption()
                             top3Chosen = true;
                             break;
                         case 2:
-                            settingsMenu = true;
+                            resetTop3Chosen = true;
+                            lcd.clear();
                             break;
                         case 3:
+                            settingsMenu = true;
+                            break;
+                        case 4:
+                            soundsChosen = true;
+                            lcd.clear();
+                            break;
+                        case 5:
                             aboutChosen = true;
                             break;
                         }
@@ -438,6 +511,42 @@ void chooseMenuOption()
             }
         swLastState = swState;
     }
+}
+
+void resetTop3()
+{
+    unsigned int currentTime = millis();
+    if (currentTime - lastScrollUpdateTime >= scrollInterval)
+    {
+        lastScrollUpdateTime = currentTime;
+        unsigned int xRead = analogRead(xPin);
+        if (xRead < minThreshold || xRead > maxThreshold)
+            resetTop3Yes = !resetTop3Yes;
+    }
+
+    swState = digitalRead(swPin);
+    if (swState && !swLastState)
+        lastDebounceTime = millis();
+    if (millis() - lastDebounceTime > debounceDelay)
+        if (swState != swDebounceState)
+        {
+            swDebounceState = swState;
+            if (swDebounceState == LOW)
+            {
+                Serial.println(resetTop3Yes);
+                if (resetTop3Yes)
+                {
+                    for (int i = 2; i < 35; i++)
+                        EEPROM.update(i, 0);
+                    EEPROM.get(2, top3Names);
+                    EEPROM.get(11, top3Scores);
+                    EEPROM.get(23, top3Times);
+                }
+                resetTop3Chosen = false;
+                lcd.clear();
+            }
+        }
+    swLastState = swState;
 }
 
 // Function to set the brightness of the LCD
@@ -540,6 +649,39 @@ void setMatrixBrightness()
                 for (int i = 0; i < matrixSize; i++)
                     for (int j = 0; j < matrixSize; j++)
                         lc.setLed(0, i, j, 0);
+                lcd.clear();
+            }
+        }
+    swLastState = swState;
+}
+
+void setSounds()
+{
+    unsigned int currentTime = millis();
+    if (currentTime - lastScrollUpdateTime >= scrollInterval)
+    {
+        lastScrollUpdateTime = currentTime;
+        unsigned int xRead = analogRead(xPin);
+        if (xRead < minThreshold || xRead > maxThreshold)
+        {
+            sounds = !sounds;
+            if (sounds)
+                tone(buzzPin, 1000, 100);
+        }
+    }
+
+    // check if sw was pressed for exit
+    swState = digitalRead(swPin);
+    if (swState && !swLastState)
+        lastDebounceTime = millis();
+    if (millis() - lastDebounceTime > debounceDelay)
+        if (swState != swDebounceState)
+        {
+            swDebounceState = swState;
+            if (swDebounceState == LOW)
+            {
+                soundsChosen = false;
+                EEPROM.put(35, sounds);
                 lcd.clear();
             }
         }
@@ -658,6 +800,7 @@ void click()
             if (swDebounceState == LOW)
             {
                 currentDrawing[yPos][xPos] = !currentDrawing[yPos][xPos];
+                tone(buzzPin, 1000 * sounds, 100);
                 updateMatrix();
             }
         }
@@ -729,6 +872,11 @@ void showResult()
         lcd.print(accuracy, 0);
         lcd.print("%");
         lcd.write(byte(2));
+        if (sounds && !singed)
+        {
+            winningSong();
+            singed = true;
+        }
     }
     else
     {
@@ -770,10 +918,16 @@ void registerTop3()
             EEPROM.put(2, top3Names);
             EEPROM.put(11, top3Scores);
             EEPROM.put(23, top3Times);
+
             started = false;
             finished = false;
             showMenu = true;
             toRegisterTop3 = false;
+            selectedName = false;
+            selectedChars[0] = 65;
+            selectedChars[1] = 65;
+            selectedChars[2] = 65;
+            activeCharIndex = 0;
             clearDrawing();
         }
     }
@@ -797,10 +951,16 @@ void registerTop3()
             EEPROM.put(2, top3Names);
             EEPROM.put(11, top3Scores);
             EEPROM.put(23, top3Times);
+
             started = false;
             finished = false;
             showMenu = true;
             toRegisterTop3 = false;
+            selectedName = false;
+            selectedChars[0] = 65;
+            selectedChars[1] = 65;
+            selectedChars[2] = 65;
+            activeCharIndex = 0;
             clearDrawing();
         }
     }
@@ -819,10 +979,16 @@ void registerTop3()
             EEPROM.put(2, top3Names);
             EEPROM.put(11, top3Scores);
             EEPROM.put(23, top3Times);
+
             started = false;
             finished = false;
             showMenu = true;
             toRegisterTop3 = false;
+            selectedName = false;
+            selectedChars[0] = 65;
+            selectedChars[1] = 65;
+            selectedChars[2] = 65;
+            activeCharIndex = 0;
             clearDrawing();
         }
     }
@@ -832,6 +998,11 @@ void registerTop3()
         finished = false;
         showMenu = true;
         toRegisterTop3 = false;
+        selectedName = false;
+        selectedChars[0] = 65;
+        selectedChars[1] = 65;
+        selectedChars[2] = 65;
+        activeCharIndex = 0;
         clearDrawing();
     }
 }
@@ -878,20 +1049,17 @@ void handleName()
                 selectedChars[activeCharIndex] = 90;
         }
     }
-    if (currentTime - finishedTime >= fastBlinkingDelay)
-    {
-        swState = digitalRead(swPin);
-        if (swState && !swLastState)
-            lastDebounceTime = millis();
-        if (millis() - lastDebounceTime > debounceDelay)
-            if (swState != swDebounceState)
-            {
-                swDebounceState = swState;
-                if (swDebounceState == LOW)
-                    selectedName = true;
-            }
-        swLastState = swState;
-    }
+    swState = digitalRead(swPin);
+    if (swState && !swLastState)
+        lastDebounceTime = millis();
+    if (millis() - lastDebounceTime > debounceDelay)
+        if (swState != swDebounceState)
+        {
+            swDebounceState = swState;
+            if (swDebounceState == LOW)
+                selectedName = true;
+        }
+    swLastState = swState;
 }
 
 // Function to blink the LED cursor
@@ -944,4 +1112,34 @@ void updatePositions()
         updateMatrix();
         matrixChanged = false;
     }
+}
+
+void winningSong()
+{
+    unsigned int NOTE_SUSTAIN = 100;
+    tone(buzzPin, NOTE_A5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_B5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_C5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_B5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_C5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_D5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_C5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_D5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_E5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_D5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_E5);
+    delay(NOTE_SUSTAIN);
+    tone(buzzPin, NOTE_E5);
+    delay(NOTE_SUSTAIN);
+    noTone(buzzPin);
 }
