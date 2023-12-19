@@ -26,15 +26,18 @@ const byte a = 10;
 // LCD object
 LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
 
-String menuOptions[] = {"1. Start", "2. Top 3", "3. Reset Top 3", "4. Brightness", "5. Sounds", "6. About"};
+String menuOptions[] = {"1. Start", "2. Top 3", "3. Reset Top 3", "4. Brightness", "5. Sounds", "6. How to play?", "7. About"};
 String settingsMenuOptions[] = {"1. Display", "2. Game", "3. Back"};
+String howToPlayTexts[] = {"Slow: Wrong", "Fast: Missed", "Lit: Correct"};
 
-const unsigned int menuOptionsLength = 6;
+const unsigned int menuOptionsLength = 7;
 unsigned int menuOptionIndex = 0;
 const unsigned int settingsMenuOptionsLength = 3;
 unsigned int settingsMenuOptionIndex = 0;
 unsigned int top3Index = 0;
 unsigned int textScrollAmount = 0;
+const unsigned int howToPlayTextsLength = 3;
+unsigned int howToPlayIndex = 0;
 unsigned int minutes;
 unsigned int seconds;
 
@@ -173,6 +176,7 @@ bool resetTop3Yes = false;
 bool sounds = true;
 bool soundsChosen = false;
 bool singed = false;
+bool howToPlayChosen = false;
 
 byte matrix[matrixSize][matrixSize] = {
     {0, 0, 0, 0, 0, 0, 0, 0},
@@ -323,7 +327,7 @@ void loop()
 
 void displayMenu()
 {
-    if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen)
+    if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen || howToPlayChosen)
         return;
     if (soundsChosen)
     {
@@ -387,7 +391,7 @@ void displayMenu()
 
 void scrollThroughMenu()
 {
-    if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen || resetTop3Chosen || soundsChosen)
+    if (aboutChosen || lcdBrightnessChosen || matrixBrightnessChosen || resetTop3Chosen || soundsChosen || howToPlayChosen)
         return;
     unsigned int currentTime = millis();
     if (currentTime - lastScrollUpdateTime >= scrollInterval)
@@ -448,6 +452,8 @@ void chooseMenuOption()
         resetTop3();
     else if (soundsChosen)
         setSounds();
+    else if (howToPlayChosen)
+        showHowToPlay();
     else
     {
         swState = digitalRead(swPin);
@@ -486,6 +492,10 @@ void chooseMenuOption()
                             lcd.clear();
                             break;
                         case 5:
+                            howToPlayChosen = true;
+                            lcd.clear();
+                            break;
+                        case 6:
                             aboutChosen = true;
                             break;
                         }
@@ -682,6 +692,48 @@ void setSounds()
             {
                 soundsChosen = false;
                 EEPROM.put(35, sounds);
+                lcd.clear();
+            }
+        }
+    swLastState = swState;
+}
+
+void showHowToPlay(){
+    unsigned int currentTime = millis();
+    if (currentTime - lastScrollUpdateTime >= scrollInterval)
+    {
+        unsigned int xRead = analogRead(xPin);
+        if(xRead < minThreshold)
+            howToPlayIndex = (howToPlayIndex + howToPlayTextsLength - 1) % howToPlayTextsLength;
+        else if(xRead > maxThreshold)
+            howToPlayIndex = (howToPlayIndex + 1) % howToPlayTextsLength;
+        lastScrollUpdateTime = currentTime;
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print("Blinking rate:");
+        lcd.setCursor(0, 1);
+        lcd.print(howToPlayTexts[howToPlayIndex]);
+        lcd.setCursor(14, 1);
+        lcd.write(byte(5));
+        lcd.write(byte(4));
+    }
+
+    lc.setLed(0, 0, 0, millis() / fastBlinkingDelay % 2);
+    lc.setLed(0, 0, matrixSize/2, millis() / veryFastBlinkingDelay % 2);
+    lc.setLed(0, 0, matrixSize-1, 1);
+
+    swState = digitalRead(swPin);
+    if (swState && !swLastState)
+        lastDebounceTime = millis();
+    if (millis() - lastDebounceTime > debounceDelay)
+        if (swState != swDebounceState)
+        {
+            swDebounceState = swState;
+            if (swDebounceState == LOW)
+            {
+                howToPlayChosen = false;
+                howToPlayIndex = 0;
+                clearDrawing();
                 lcd.clear();
             }
         }
